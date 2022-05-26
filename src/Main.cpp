@@ -7,7 +7,7 @@ struct Boid
 	tako::Vector3 velocity;
 };
 
-constexpr size_t BOID_COUNT = 1000;
+constexpr size_t BOID_COUNT = 2000;
 
 struct FrameData
 {
@@ -15,6 +15,27 @@ struct FrameData
 	tako::Vector3 cameraPosition;
 	tako::Quaternion cameraRotation;
 };
+
+template<typename Callback>
+void ParallelFor(size_t iterations, Callback callback)
+{
+	constexpr auto batchSize = 10;
+	auto jobs = iterations / batchSize;
+	if (jobs % batchSize != 0)
+	{
+		jobs++;
+	}
+	for (size_t j = 0; j < jobs; j++)
+	{
+		tako::JobSystem::JobSystem::Schedule([=]()
+		{
+			for (size_t i = batchSize * j; i < std::min(iterations, batchSize * (j + 1)); i++)
+			{
+				callback(i);
+			}
+		});
+	}
+}
 
 class Game
 {
@@ -37,10 +58,10 @@ public:
 	{
 		new (frameData) FrameData();
 		
-		for (size_t i = 0; i < BOID_COUNT; i++)
+		ParallelFor(BOID_COUNT, [this, frameData, dt](size_t i)
 		{
 			frameData->boids[i] = SimulateBoid(prevState.boids[i], i, dt);
-		}
+		});
 
 		tako::Vector3 movAxis;
 		if (input->GetKey(tako::Key::W))
@@ -62,7 +83,10 @@ public:
 
 		frameData->cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
 
-		prevState = *frameData;
+		tako::JobSystem::Continuation([=]()
+		{
+			prevState = *frameData;
+		});
 	}
 
 	Boid SimulateBoid(Boid boid, size_t index, float dt)
