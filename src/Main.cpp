@@ -1,25 +1,28 @@
 #include "Tako.hpp"
 #include "Renderer3D.hpp"
+#include <memory_resource>
+#include <map>
+#include "Allocators/LinearAllocator.hpp"
+#include "Boid.hpp"
+#include "Octree.hpp"
 
-struct Boid
-{
-	tako::Vector3 position;
-	tako::Vector3 velocity;
-};
+constexpr size_t BOID_COUNT = 3000;
 
-constexpr size_t BOID_COUNT = 2000;
-
-struct FrameData
+struct StateData
 {
 	std::array<Boid, BOID_COUNT> boids;
-	tako::Vector3 cameraPosition;
+	tako::Vector3 cameraPosition = { 0, 0, -200};
 	tako::Quaternion cameraRotation;
 };
 
-template<typename Callback>
-void ParallelFor(size_t iterations, Callback callback)
+struct FrameData
 {
-	constexpr auto batchSize = 10;
+	StateData state;
+};
+
+template<typename Callback>
+void ParallelFor(size_t iterations, size_t batchSize, Callback callback)
+{
 	auto jobs = iterations / batchSize;
 	if (jobs % batchSize != 0)
 	{
@@ -29,7 +32,8 @@ void ParallelFor(size_t iterations, Callback callback)
 	{
 		tako::JobSystem::JobSystem::Schedule([=]()
 		{
-			for (size_t i = batchSize * j; i < std::min(iterations, batchSize * (j + 1)); i++)
+			auto target = std::min(iterations, batchSize * (j + 1));
+			for (size_t i = batchSize * j; i < target; i++)
 			{
 				callback(i);
 			}
@@ -37,9 +41,23 @@ void ParallelFor(size_t iterations, Callback callback)
 	}
 }
 
+template<typename J, typename C>
+void ScheduleContinuation(J&& j, C&& c)
+{
+	tako::JobSystem::Schedule([=]()
+	{
+		tako::JobSystem::Schedule(std::move(j));
+		tako::JobSystem::Continuation(std::move(c));
+	});
+}
+constexpr int SPAWN_RANGE = 300;
+
 class Game
 {
 public:
+	Game() : m_tree(Rect({ 0, 0, 0 }, {SPAWN_RANGE, SPAWN_RANGE, SPAWN_RANGE }))
+	{
+	}
 	void Setup(const tako::SetupData& setup)
 	{
 		m_renderer = new tako::Renderer3D(setup.context);
@@ -49,20 +67,28 @@ public:
 		m_model = m_renderer->LoadModel("./Assets/boid.glb");
 		for (auto& boid : prevState.boids)
 		{
-			boid.position = tako::Vector3(rand() % 10 - 5, rand() % 10 - 5, rand() % 10 - 5);
-			boid.velocity = tako::Vector3(rand() % 10 - 5, rand() % 10 - 5, rand() % 10 - 5);
+			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
+			boid.velocity = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
+			m_tree.Insert(&boid);
 		}
 	}
 
 	void Update(tako::Input* input, float dt, FrameData* frameData)
 	{
 		new (frameData) FrameData();
-		
-		ParallelFor(BOID_COUNT, [this, frameData, dt](size_t i)
+		tako::JobSystem::Schedule([this, frameData, dt]()
 		{
-			frameData->boids[i] = SimulateBoid(prevState.boids[i], i, dt);
+			m_tree.RebalanceThreaded();
+			tako::JobSystem::Continuation([=]()
+			{
+				//LOG("{}", m_tree.GetElementCount());
+				ParallelFor(BOID_COUNT, 1, [=](size_t i)
+				{
+					frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
+				});
+			});
 		});
-
+		
 		tako::Vector3 movAxis;
 		if (input->GetKey(tako::Key::W))
 		{
@@ -80,28 +106,38 @@ public:
 		{
 			movAxis.x += 1;
 		}
+		if (input->GetKey(tako::Key::Up))
+		{
+			movAxis.y -= 1;
+		}
+		if (input->GetKey(tako::Key::Down))
+		{
+			movAxis.y += 1;
+		}
 
-		frameData->cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
+		frameData->state.cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
 
 		tako::JobSystem::Continuation([=]()
 		{
-			prevState = *frameData;
+			prevState = frameData->state;
 		});
 	}
 
-	Boid SimulateBoid(Boid boid, size_t index, float dt)
+	Boid SimulateBoid(size_t index, float dt, FrameData* frameData)
 	{
+		Boid* self = &prevState.boids[index];
+		Boid boid = *self;
 		int flockMates = 0;
 		tako::Vector3 flockCenter;
 		tako::Vector3 flockAvoid;
 		tako::Vector3 flockSpeed;
-		for (size_t i = 0; i < BOID_COUNT; i++)
+		//auto range = m_cellMap.equal_range(m_hashes[index]);
+		m_tree.Iterate({ boid.position, {10, 10, 10} }, [&](Boid other, Boid* ref)
 		{
-			if (i == index)
+			if (self == ref)
 			{
-				continue;
+				return;
 			}
-			Boid& other = prevState.boids[i];
 			auto offset = boid.position - other.position;
 			auto distanceSquared = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
 
@@ -110,30 +146,37 @@ public:
 				flockMates++;
 				flockCenter += other.position;
 				flockSpeed += other.velocity;
-				flockAvoid += offset;
+				if (distanceSquared < 5 * 5)
+				{
+					flockAvoid += offset;
+				}
+
 			}
-		}
+		});
 
 		tako::Vector3 boundsAvoidance;
-		float boundary = 20;
-		float boundFactor = 1;
+		float boundary = 100;
+		float boundFactor = 2;
 		auto centerOffset = tako::Vector3(0, 0, 0) - boid.position;
 		auto centerDistance = centerOffset.magnitudeSquared();
 		if (centerDistance > boundary * boundary)
 		{
 			boundsAvoidance = boundFactor / std::sqrt(centerDistance) * centerOffset;
 		}
-		flockCenter /= flockMates;
-		flockSpeed /= flockMates;
-		
-		auto cohesion = 0.4f * (flockCenter - boid.position);
-		auto separation = 0.1f * flockAvoid;
-		auto alignment = 0.1f * flockSpeed;
-		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance);
-		auto speed = boid.velocity.magnitudeSquared();
-		if (speed > 5 * 5)
+		if (flockMates > 0)
 		{
-			boid.velocity *= 5 / std::sqrt(speed);
+			flockCenter /= flockMates;
+			flockSpeed /= flockMates;
+		}
+		
+		auto cohesion = 1 * (flockCenter - boid.position);
+		auto separation = 2 * flockAvoid;
+		auto alignment = 1.5f * flockSpeed;
+		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude();
+		auto speed = boid.velocity.magnitudeSquared();
+		if (speed > 4 * 4)
+		{
+			boid.velocity *= 4 / std::sqrt(speed);
 		}
 		boid.position += dt * boid.velocity;
 		return boid;
@@ -143,14 +186,9 @@ public:
 	{
 		m_renderer->Begin();
 		m_renderer->SetLightPosition({0, 0, 0});
-		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->cameraPosition, frameData->cameraRotation));
-		//auto transform = tako::Matrix4::ScaleMatrix(frameData->zoom, frameData->zoom, frameData->zoom);
-		//renderer->DrawMesh(golf, texture, );
+		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
-		//m_renderer->DrawModel(model, transform);
-
-		//renderer->DrawCube(tako::Matrix4::translation(0, -1, 0), model.materials[0]);
-		for (auto& boid : frameData->boids)
+		for (auto& boid : frameData->state.boids)
 		{
 			m_renderer->DrawModel(m_model, tako::Matrix4::translation(boid.position));
 		}
@@ -158,10 +196,11 @@ public:
 		m_renderer->End();
 	}
 private:
-	FrameData prevState;
+	StateData prevState;
 	tako::Renderer3D* m_renderer;
 	tako::Material m_material;
 	tako::Model m_model;
+	Octree m_tree;
 };
 
 void Setup(void* gameData, const tako::SetupData& setup)
