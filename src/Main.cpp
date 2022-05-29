@@ -12,6 +12,8 @@ struct StateData
 {
 	std::array<Boid, BOID_COUNT> boids;
 	tako::Vector3 cameraPosition = { 0, 0, -200};
+	float phi = 0;
+	float theta = 0;
 	tako::Quaternion cameraRotation;
 };
 
@@ -88,7 +90,17 @@ public:
 				});
 			});
 		});
-		
+
+		auto mouseMove = input->GetMousePosition();
+		auto mouseDelta = mouseMove - prevMousePos;
+		prevMousePos = mouseMove;
+
+		frameData->state.phi = prevState.phi + mouseDelta.x * 5;
+		frameData->state.theta = tako::mathf::clamp(prevState.theta + mouseDelta.y * 5, -90, 90);
+		auto xRotation = tako::Quaternion::AngleAxis(frameData->state.phi, tako::Vector3(0, 1, 0));
+		auto yRotation = tako::Quaternion::AngleAxis(frameData->state.theta, tako::Vector3(0, 0, -1));
+		frameData->state.cameraRotation = tako::Quaternion() * xRotation * yRotation;
+
 		tako::Vector3 movAxis;
 		if (input->GetKey(tako::Key::W))
 		{
@@ -106,6 +118,9 @@ public:
 		{
 			movAxis.x += 1;
 		}
+
+		movAxis = xRotation * movAxis;
+
 		if (input->GetKey(tako::Key::Up))
 		{
 			movAxis.y -= 1;
@@ -114,6 +129,7 @@ public:
 		{
 			movAxis.y += 1;
 		}
+
 
 		frameData->state.cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
 
@@ -197,6 +213,7 @@ public:
 	}
 private:
 	StateData prevState;
+	tako::Vector2 prevMousePos;
 	tako::Renderer3D* m_renderer;
 	tako::Material m_material;
 	tako::Model m_model;
