@@ -52,12 +52,12 @@ void ScheduleContinuation(J&& j, C&& c)
 		tako::JobSystem::Continuation(std::move(c));
 	});
 }
-constexpr int SPAWN_RANGE = 300;
+constexpr int SPAWN_RANGE = 250;
 
 class Game
 {
 public:
-	Game() : m_tree(Rect({ 0, 0, 0 }, {SPAWN_RANGE, SPAWN_RANGE, SPAWN_RANGE }))
+	Game() : m_tree(Rect({ 0, 0, 0 }, {SPAWN_RANGE * 2, SPAWN_RANGE * 2, SPAWN_RANGE * 2 }))
 	{
 	}
 	void Setup(const tako::SetupData& setup)
@@ -70,7 +70,7 @@ public:
 		for (auto& boid : prevState.boids)
 		{
 			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
-			boid.velocity = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
+			boid.velocity = tako::Vector3(1, 0, 0);
 			m_tree.Insert(&boid);
 		}
 	}
@@ -148,7 +148,7 @@ public:
 		tako::Vector3 flockAvoid;
 		tako::Vector3 flockSpeed;
 		//auto range = m_cellMap.equal_range(m_hashes[index]);
-		m_tree.Iterate({ boid.position, {10, 10, 10} }, [&](Boid other, Boid* ref)
+		m_tree.Iterate({ boid.position, {5, 5, 5} }, [&](Boid other, Boid* ref)
 		{
 			if (self == ref)
 			{
@@ -157,21 +157,17 @@ public:
 			auto offset = boid.position - other.position;
 			auto distanceSquared = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
 
-			if (distanceSquared < 10 * 10)
+			if (distanceSquared < 5 * 5)
 			{
 				flockMates++;
 				flockCenter += other.position;
 				flockSpeed += other.velocity;
-				if (distanceSquared < 5 * 5)
-				{
-					flockAvoid += offset;
-				}
-
+				flockAvoid += offset;
 			}
 		});
 
 		tako::Vector3 boundsAvoidance;
-		float boundary = 100;
+		float boundary = SPAWN_RANGE * 2;
 		float boundFactor = 2;
 		auto centerOffset = tako::Vector3(0, 0, 0) - boid.position;
 		auto centerDistance = centerOffset.magnitudeSquared();
@@ -206,7 +202,10 @@ public:
 
 		for (auto& boid : frameData->state.boids)
 		{
-			m_renderer->DrawModel(m_model, tako::Matrix4::translation(boid.position));
+			auto translation = tako::Matrix4::translation(boid.position);
+			auto rotation = tako::Matrix4::DirectionToRotation(boid.velocity.normalize(), {0, 1, 0});//tako::Quaternion::FromToRotation(boid.velocity, tako::Vector3(0, 1, 0)).ToRotationMatrix();
+
+			m_renderer->DrawModel(m_model, (rotation * tako::Quaternion::FromEuler({ 90, 0, 0 }).ToRotationMatrix()).translate(boid.position));
 		}
 
 		m_renderer->End();
