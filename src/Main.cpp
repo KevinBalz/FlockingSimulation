@@ -6,12 +6,12 @@
 #include "Boid.hpp"
 #include "Octree.hpp"
 
-constexpr size_t BOID_COUNT = 3000;
+constexpr size_t BOID_COUNT = 60000;
 
 struct StateData
 {
 	std::array<Boid, BOID_COUNT> boids;
-	tako::Vector3 cameraPosition = { 0, 0, -200};
+	tako::Vector3 cameraPosition = { 0, 0, 0 };
 	float phi = 0;
 	float theta = 0;
 	tako::Quaternion cameraRotation;
@@ -52,7 +52,7 @@ void ScheduleContinuation(J&& j, C&& c)
 		tako::JobSystem::Continuation(std::move(c));
 	});
 }
-constexpr int SPAWN_RANGE = 250;
+constexpr int SPAWN_RANGE = 500;
 
 class Game
 {
@@ -70,7 +70,7 @@ public:
 		for (auto& boid : prevState.boids)
 		{
 			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
-			boid.velocity = tako::Vector3(1, 0, 0);
+			boid.velocity = tako::Vector3(rand() % 10 - 5, rand() % 10 - 5, rand() % 10 - 5);
 			m_tree.Insert(&boid);
 		}
 	}
@@ -80,11 +80,12 @@ public:
 		new (frameData) FrameData();
 		tako::JobSystem::Schedule([this, frameData, dt]()
 		{
-			m_tree.RebalanceThreaded();
+			//m_tree.RebalanceThreaded();
+			m_tree.Rebalance();
 			tako::JobSystem::Continuation([=]()
 			{
 				//LOG("{}", m_tree.GetElementCount());
-				ParallelFor(BOID_COUNT, 1, [=](size_t i)
+				ParallelFor(BOID_COUNT, 100, [=](size_t i)
 				{
 					frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
 				});
@@ -147,48 +148,45 @@ public:
 		tako::Vector3 flockCenter;
 		tako::Vector3 flockAvoid;
 		tako::Vector3 flockSpeed;
-		//auto range = m_cellMap.equal_range(m_hashes[index]);
-		m_tree.Iterate({ boid.position, {5, 5, 5} }, [&](Boid other, Boid* ref)
+		m_tree.Iterate({ boid.position, {10, 10, 10} }, [&](Boid other)
 		{
-			if (self == ref)
-			{
-				return;
-			}
 			auto offset = boid.position - other.position;
 			auto distanceSquared = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
 
-			if (distanceSquared < 5 * 5)
+			//if distance is 0  - it probably is it self
+			if (distanceSquared < 10 * 10 && distanceSquared > 0)
 			{
 				flockMates++;
 				flockCenter += other.position;
 				flockSpeed += other.velocity;
-				flockAvoid += offset;
+				flockAvoid += offset / std::sqrt(distanceSquared);
 			}
 		});
 
-		tako::Vector3 boundsAvoidance;
-		float boundary = SPAWN_RANGE * 2;
-		float boundFactor = 2;
+		tako::Vector3 boundsAvoidance(0, 0, 0);
+		float boundary = SPAWN_RANGE / 2;
+		float boundFactor = 0.01f;
 		auto centerOffset = tako::Vector3(0, 0, 0) - boid.position;
 		auto centerDistance = centerOffset.magnitudeSquared();
 		if (centerDistance > boundary * boundary)
 		{
-			boundsAvoidance = boundFactor / std::sqrt(centerDistance) * centerOffset;
+			boundsAvoidance = boundFactor * centerOffset;
 		}
+		tako::Vector3 cohesion;
 		if (flockMates > 0)
 		{
 			flockCenter /= flockMates;
 			flockSpeed /= flockMates;
+			cohesion = 6 * (flockCenter - boid.position);
 		}
 		
-		auto cohesion = 1 * (flockCenter - boid.position);
-		auto separation = 2 * flockAvoid;
-		auto alignment = 1.5f * flockSpeed;
+		auto separation = 7 * flockAvoid;
+		auto alignment = 8 * flockSpeed;
 		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude();
 		auto speed = boid.velocity.magnitudeSquared();
-		if (speed > 4 * 4)
+		if (speed > 10 * 10)
 		{
-			boid.velocity *= 4 / std::sqrt(speed);
+			boid.velocity *= 10 / std::sqrt(speed);
 		}
 		boid.position += dt * boid.velocity;
 		return boid;
@@ -197,7 +195,7 @@ public:
 	void Draw(FrameData* frameData)
 	{
 		m_renderer->Begin();
-		m_renderer->SetLightPosition({0, 0, 0});
+		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
 		for (auto& boid : frameData->state.boids)

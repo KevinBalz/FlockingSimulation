@@ -6,7 +6,7 @@
 #include "JobSystem.hpp"
 #include <algorithm>
 
-constexpr size_t MAX_ELEMENTS_LEAF = 32;
+constexpr size_t MAX_ELEMENTS_LEAF = 128;
 constexpr size_t MAX_TREE_DEPTH = 256;
 
 template<typename Callback, typename T>
@@ -89,12 +89,7 @@ public:
 
 		for (auto b : m_containing)
 		{
-			callback(b.b, b.p);
-		}
-
-		for (auto b : m_outside)
-		{
-			callback(b.b, b.p);
+			callback(b.b);
 		}
 	}
 
@@ -287,7 +282,7 @@ private:
 	bool CheckCollapse()
 	{
 		//TODO: what if existing outsiders would cause the tree to subdivide again
-		return m_totalChildElements + m_containing.size() < MAX_ELEMENTS_LEAF / 4;
+		return m_totalChildElements + m_containing.size() + m_outside.size() < MAX_ELEMENTS_LEAF / 2;
 	}
 
 	void Collapse()
