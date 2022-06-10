@@ -86,7 +86,7 @@ public:
 	{
 		if (!m_area.Contains(boid.b.position))
 		{
-			m_outside.push_back(boid);
+			InsertArr(boid);
 			return;
 		}
 
@@ -114,6 +114,8 @@ public:
 		}
 	}
 
+	/*
+	//TODO: Reevaluate, not more performance as expected
 	void RebalanceThreaded()
 	{
 		if (!m_branch || CheckCollapse())
@@ -138,42 +140,55 @@ public:
 			FetchChildOutsiders();
 		});
 	}
+	*/
 
-	void Rebalance()
+	void Rebalance(std::pmr::vector<Node>* outsiders = nullptr)
 	{
 		if (m_branch)
 		{
+
 			if (CheckCollapse())
 			{
 				Collapse();
 			}
 			else
 			{
+				std::array<tako::U8, 1024 * sizeof(Node)> tmpData;
+				std::pmr::monotonic_buffer_resource buffer(tmpData.data(), tmpData.size());
+				std::pmr::vector<Node> ownOutsiders(&buffer);
 				for (int i = 0; i < 8; i++)
 				{
-					m_leafs[i].Rebalance();
+					m_leafs[i].Rebalance(&ownOutsiders);
+				}
+				RebalanceContaining();
+				for (int i = 0; i < ownOutsiders.size(); i++)
+				{
+					auto& b = ownOutsiders[i];
+					if (m_area.Contains(b.b.position) || outsiders == nullptr)
+					{
+						InsertContained(b);
+					}
+					else
+					{
+						outsiders->push_back(b);
+					}
 				}
 			}
 		}
-
-		RebalanceOutsiders();
-		RebalanceContaining();
-
-		if (m_branch)
+		else
 		{
-			FetchChildOutsiders();
+			RebalanceContaining();
 		}
 	}
 
 	size_t GetElementCount()
 	{
-		return m_size + m_outside.size() + m_totalChildElements;
+		return m_size + m_totalChildElements;
 	}
 private:
 	Octree* m_leafs = nullptr;
 	std::array<Node, MAX_ELEMENTS_LEAF> m_containing;
 	size_t m_size;
-	std::vector<Node> m_outside;
 	size_t m_totalChildElements = 0;
 	Rect m_area;
 	size_t m_depth;
@@ -246,52 +261,41 @@ private:
 		new (&m_leafs[i]) Octree({ center, size }, m_pool, m_depth + 1);
 	}
 
-	void RebalanceOutsiders()
-	{
-		for (int i = 0; i < m_outside.size(); i++)
-		{
-			auto& b = m_outside[i];
-			b.b = *b.p;
-			if (m_area.Contains(b.b.position))
-			{
-				InsertContained(b);
-				if (i == m_outside.size() - 1)
-				{
-					m_outside.pop_back();
-				}
-				else
-				{
-					std::swap(m_outside[i], m_outside[m_outside.size() - 1]);
-					m_outside.pop_back();
-					i--;
-				}
-			}
-		}
-	}
-
-	void RebalanceContaining()
+	void RebalanceContaining(std::pmr::vector<Node>* outsiders = nullptr)
 	{
 		if (m_branch)
 		{
-			RemoveIf(m_containing, m_size, [&](Node& b)
+			if (outsiders)
 			{
-				b.b = *b.p;
-				if (!m_area.Contains(b.b.position))
+				RemoveIf(m_containing, m_size, [&](Node& b)
 				{
-					m_outside.push_back(b);
-					return true;
-				}
-				return InsertIntoChild(b);
-			});
+					b.b = *b.p;
+					if (!m_area.Contains(b.b.position))
+					{
+						outsiders->push_back(b);
+						return true;
+					}
+					return InsertIntoChild(b);
+				});
+			}
+			else
+			{
+				RemoveIf(m_containing, m_size, [&](Node& b)
+				{
+					b.b = *b.p;
+					return InsertIntoChild(b);
+				});
+			}
+
 		}
-		else
+		else if (outsiders)
 		{
 			RemoveIf(m_containing, m_size, [&](Node& b)
 			{
 				b.b = *b.p;
 				if (!m_area.Contains(b.b.position))
 				{
-					m_outside.push_back(b);
+					outsiders->push_back(b);
 					return true;
 				}
 				return false;
@@ -299,23 +303,9 @@ private:
 		}
 	}
 
-	void FetchChildOutsiders()
-	{
-		for (int i = 0; i < 8; i++)
-		{
-			auto& leaf = m_leafs[i];
-			m_totalChildElements -= leaf.m_outside.size();
-			for (auto b : leaf.m_outside)
-			{
-				Insert(b);
-			}
-			leaf.m_outside.clear();
-		}
-	}
-
 	bool CheckCollapse()
 	{
-		return m_totalChildElements + m_size + m_outside.size() < MAX_ELEMENTS_LEAF / 2;
+		return m_totalChildElements + m_size < MAX_ELEMENTS_LEAF / 2;
 	}
 
 	void Collapse()
@@ -342,10 +332,6 @@ private:
 		for (int i = 0; i < target->m_size; i++)
 		{
 			InsertArr(target->m_containing[i]);
-		}
-		for (int i = 0; i < target->m_outside.size(); i++)
-		{
-			InsertArr(target->m_outside[i]);
 		}
 	}
 
