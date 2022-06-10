@@ -57,7 +57,7 @@ constexpr int SPAWN_RANGE = 500;
 class Game
 {
 public:
-	Game() : m_tree(Rect({ 0, 0, 0 }, {SPAWN_RANGE * 2, SPAWN_RANGE * 2, SPAWN_RANGE * 2 }))
+	Game() : m_octPool(m_poolData.data(), m_poolData.size(), sizeof(Octree) * 8), m_tree(Rect({0, 0, 0}, {SPAWN_RANGE * 2, SPAWN_RANGE * 2, SPAWN_RANGE * 2}), m_octPool)
 	{
 	}
 	void Setup(const tako::SetupData& setup)
@@ -69,7 +69,7 @@ public:
 		m_model = m_renderer->LoadModel("./Assets/boid.glb");
 		for (auto& boid : prevState.boids)
 		{
-			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2, rand() % SPAWN_RANGE - SPAWN_RANGE / 2);
+			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f, rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f, rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f);
 			boid.velocity = tako::Vector3(rand() % 10 - 5, rand() % 10 - 5, rand() % 10 - 5);
 			m_tree.Insert(&boid);
 		}
@@ -214,6 +214,8 @@ private:
 	tako::Renderer3D* m_renderer;
 	tako::Material m_material;
 	tako::Model m_model;
+	std::array<tako::U8, 1024 * sizeof(Octree) * 8> m_poolData;
+	tako::Allocators::PoolAllocator m_octPool;
 	Octree m_tree;
 };
 

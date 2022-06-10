@@ -32,6 +32,29 @@ void RemoveIf(std::vector<T>& vec, Callback& c)
 	}
 }
 
+template<typename Callback, typename T, size_t arr_size>
+void RemoveIf(std::array<T, arr_size>& arr, size_t& size, Callback& c)
+{
+	for (int i = 0; i < size; i++)
+	{
+		auto& b = arr[i];
+		bool remove = c(b);
+		if (remove)
+		{
+			if (i == size - 1)
+			{
+				size--;
+			}
+			else
+			{
+				std::swap(arr[i], arr[size - 1]);
+				size--;
+				i--;
+			}
+		}
+	}
+}
+
 
 class Octree
 {
@@ -41,19 +64,16 @@ class Octree
 		Boid* p;
 	};
 public:
-	Octree(Rect area, size_t depth = 0) : m_area(area), m_depth(depth)
+	Octree(Rect area, tako::Allocators::PoolAllocator& pool, size_t depth = 0) : m_area(area), m_depth(depth), m_pool(pool), m_size(0)
 	{
-		m_containing.reserve(MAX_ELEMENTS_LEAF);
+
 	}
 
 	~Octree()
 	{
 		if (m_branch)
 		{
-			for (auto leaf : m_leafs)
-			{
-				delete leaf;
-			}
+			DestroyLeafs();
 		}
 	}
 
@@ -78,18 +98,19 @@ public:
 	{
 		if (m_branch)
 		{
-			for (auto l : m_leafs)
+			for (int i = 0; i < 8; i++)
 			{
-				if (Rect::Overlaps(l->m_area, area))
+				auto& l = m_leafs[i];
+				if (Rect::Overlaps(l.m_area, area))
 				{
-					l->Iterate(area, callback);
+					l.Iterate(area, callback);
 				}
 			}
 		}
 
-		for (auto b : m_containing)
+		for (int i = 0; i < m_size; i++)
 		{
-			callback(b.b);
+			callback(m_containing[i].b);
 		}
 	}
 
@@ -101,8 +122,9 @@ public:
 			return;
 		}
 
-		for (auto leaf : m_leafs)
+		for (int i = 0; i < 8; i++)
 		{
+			Octree* leaf = &m_leafs[i];
 			tako::JobSystem::Schedule([leaf]()
 			{
 				leaf->RebalanceThreaded();
@@ -127,9 +149,9 @@ public:
 			}
 			else
 			{
-				for (auto leaf : m_leafs)
+				for (int i = 0; i < 8; i++)
 				{
-					leaf->Rebalance();
+					m_leafs[i].Rebalance();
 				}
 			}
 		}
@@ -145,23 +167,33 @@ public:
 
 	size_t GetElementCount()
 	{
-		return m_containing.size() + m_outside.size() + m_totalChildElements;
+		return m_size + m_outside.size() + m_totalChildElements;
 	}
 private:
-	std::array<Octree*, 8> m_leafs;
-	std::vector<Node> m_containing;
+	Octree* m_leafs = nullptr;
+	std::array<Node, MAX_ELEMENTS_LEAF> m_containing;
+	size_t m_size;
 	std::vector<Node> m_outside;
 	size_t m_totalChildElements = 0;
 	Rect m_area;
 	size_t m_depth;
+	tako::Allocators::PoolAllocator& m_pool;
 	bool m_branch = false;
+
+	void InsertArr(Node node)
+	{
+		//TODO: its possible if a large amount of child boids are on borders that the parent array could overfill
+		m_containing[m_size] = node;
+		m_size++;
+	}
 
 	void InsertContained(Node boid)
 	{
 		if (!m_branch)
 		{
-			if (m_containing.size() == MAX_ELEMENTS_LEAF && m_depth < MAX_TREE_DEPTH)
+			if (m_size == MAX_ELEMENTS_LEAF)
 			{
+				m_leafs = reinterpret_cast<Octree*>(m_pool.Allocate());
 				//Subdivide
 				InitSubtree(0, -1, -1, 1);
 				InitSubtree(1, -1, 1, 1);
@@ -173,7 +205,7 @@ private:
 				InitSubtree(7, 1, 1, -1);
 				m_branch = true;
 
-				RemoveIf(m_containing, [&](Node& b)
+				RemoveIf(m_containing, m_size, [&](Node& b)
 				{
 					return InsertIntoChild(b);
 				});
@@ -181,23 +213,24 @@ private:
 				return;
 			}
 
-			m_containing.push_back(boid);
+			InsertArr(boid);
 			return;
 		}
 
 		if (!InsertIntoChild(boid))
 		{
-			m_containing.push_back(boid);
+			InsertArr(boid);
 		}
 	}
 
 	bool InsertIntoChild(Node boid)
 	{
-		for (auto leaf : m_leafs)
+		for (int i = 0; i < 8; i++)
 		{
-			if (leaf->m_area.Contains(boid.b.position))
+			auto& leaf = m_leafs[i];
+			if (leaf.m_area.Contains(boid.b.position))
 			{
-				leaf->InsertContained(boid);
+				leaf.InsertContained(boid);
 				m_totalChildElements++;
 				return true;
 			}
@@ -210,7 +243,7 @@ private:
 		auto size = 1.0f / 2 * m_area.size;
 		auto center = m_area.center + tako::Vector3(x * size.x / 2, y * size.y / 2, z * size.z / 2);
 		//LOG("{} {} {}, {} {} {}", center.x, center.y, center.z, size.x, size.y, size.z);
-		m_leafs[i] = new Octree({ center, size }, m_depth+1);
+		new (&m_leafs[i]) Octree({ center, size }, m_pool, m_depth + 1);
 	}
 
 	void RebalanceOutsiders()
@@ -240,7 +273,7 @@ private:
 	{
 		if (m_branch)
 		{
-			RemoveIf(m_containing, [&](Node& b)
+			RemoveIf(m_containing, m_size, [&](Node& b)
 			{
 				b.b = *b.p;
 				if (!m_area.Contains(b.b.position))
@@ -253,7 +286,7 @@ private:
 		}
 		else
 		{
-			RemoveIf(m_containing, [&](Node& b)
+			RemoveIf(m_containing, m_size, [&](Node& b)
 			{
 				b.b = *b.p;
 				if (!m_area.Contains(b.b.position))
@@ -268,50 +301,60 @@ private:
 
 	void FetchChildOutsiders()
 	{
-		for (auto leaf : m_leafs)
+		for (int i = 0; i < 8; i++)
 		{
-			m_totalChildElements -= leaf->m_outside.size();
-			for (auto b : leaf->m_outside)
+			auto& leaf = m_leafs[i];
+			m_totalChildElements -= leaf.m_outside.size();
+			for (auto b : leaf.m_outside)
 			{
 				Insert(b);
 			}
-			leaf->m_outside.clear();
+			leaf.m_outside.clear();
 		}
 	}
 
 	bool CheckCollapse()
 	{
-		//TODO: what if existing outsiders would cause the tree to subdivide again
-		return m_totalChildElements + m_containing.size() + m_outside.size() < MAX_ELEMENTS_LEAF / 2;
+		return m_totalChildElements + m_size + m_outside.size() < MAX_ELEMENTS_LEAF / 2;
 	}
 
 	void Collapse()
 	{
-		for (auto leaf : m_leafs)
+		for (int i = 0; i < 8; i++)
 		{
-			leaf->ExtractSap(this);
+			m_leafs[i].ExtractSap(this);
 		}
 		m_branch = false;
 		m_totalChildElements = 0;
-		for (auto leaf : m_leafs)
-		{
-			delete leaf;
-		}
+		DestroyLeafs();
 	}
 
 	void ExtractSap(Octree* target)
 	{
 		if (m_branch)
 		{
-			for (auto leaf : m_leafs)
+			for (int i = 0; i < 8; i++)
 			{
-				leaf->ExtractSap(target);
+				m_leafs[i].ExtractSap(target);
 			}
 		}
 
-		std::move(std::begin(m_containing), std::end(m_containing), std::back_inserter(target->m_containing));
-		m_containing.clear();
-		std::move(std::begin(m_outside), std::end(m_outside), std::back_inserter(target->m_containing));
-		m_outside.clear();
+		for (int i = 0; i < target->m_size; i++)
+		{
+			InsertArr(target->m_containing[i]);
+		}
+		for (int i = 0; i < target->m_outside.size(); i++)
+		{
+			InsertArr(target->m_outside[i]);
+		}
+	}
+
+	void DestroyLeafs()
+	{
+		for (int i = 0; i < 8; i++)
+		{
+			std::destroy_at(&m_leafs[i]);
+		}
+		m_pool.Deallocate(m_leafs);
 	}
 };
