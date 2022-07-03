@@ -6,7 +6,7 @@
 #include "Boid.hpp"
 #include "Octree.hpp"
 
-constexpr size_t BOID_COUNT = 60000;
+constexpr size_t BOID_COUNT = 80000;
 
 struct StateData
 {
@@ -20,6 +20,7 @@ struct StateData
 struct FrameData
 {
 	StateData state;
+	std::array<tako::Matrix4, BOID_COUNT> boidTransforms;
 };
 
 template<typename Callback>
@@ -78,18 +79,9 @@ public:
 	void Update(tako::Input* input, float dt, FrameData* frameData)
 	{
 		new (frameData) FrameData();
-		tako::JobSystem::Schedule([this, frameData, dt]()
+		ParallelFor(BOID_COUNT, 500, [=](size_t i)
 		{
-			//m_tree.RebalanceThreaded();
-			m_tree.Rebalance();
-			tako::JobSystem::Continuation([=]()
-			{
-				//LOG("{}", m_tree.GetElementCount());
-				ParallelFor(BOID_COUNT, 100, [=](size_t i)
-				{
-					frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
-				});
-			});
+			frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
 		});
 
 		auto mouseMove = input->GetMousePosition();
@@ -136,7 +128,15 @@ public:
 
 		tako::JobSystem::Continuation([=]()
 		{
+			ParallelFor(BOID_COUNT, 1000, [=](size_t i)
+			{
+				auto rotation = tako::Matrix4::DirectionToRotation(frameData->state.boids[i].velocity.normalized(), { 0, 1, 0 });
+
+				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ 90, 0, 0 }).ToRotationMatrix()).translate(frameData->state.boids[i].position);
+			});
+
 			prevState = frameData->state;
+			m_tree.Rebalance();
 		});
 	}
 
@@ -164,13 +164,13 @@ public:
 		});
 
 		tako::Vector3 boundsAvoidance(0, 0, 0);
-		float boundary = SPAWN_RANGE / 2;
-		float boundFactor = 0.01f;
+		float boundary = SPAWN_RANGE / 3;
+		float boundFactor = 1.0f;
 		auto centerOffset = tako::Vector3(0, 0, 0) - boid.position;
 		auto centerDistance = centerOffset.magnitudeSquared();
 		if (centerDistance > boundary * boundary)
 		{
-			boundsAvoidance = boundFactor * centerOffset;
+			boundsAvoidance = boundFactor * centerOffset.limitMagnitude();
 		}
 		tako::Vector3 cohesion;
 		if (flockMates > 0)
@@ -180,9 +180,9 @@ public:
 			cohesion = 6 * (flockCenter - boid.position);
 		}
 		
-		auto separation = 7 * flockAvoid;
+		auto separation = 15 * flockAvoid;
 		auto alignment = 8 * flockSpeed;
-		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude();
+		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude(10);
 		auto speed = boid.velocity.magnitudeSquared();
 		if (speed > 10 * 10)
 		{
@@ -198,12 +198,9 @@ public:
 		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
-		for (auto& boid : frameData->state.boids)
+		for (auto& transform : frameData->boidTransforms)
 		{
-			auto translation = tako::Matrix4::translation(boid.position);
-			auto rotation = tako::Matrix4::DirectionToRotation(boid.velocity.normalize(), {0, 1, 0});//tako::Quaternion::FromToRotation(boid.velocity, tako::Vector3(0, 1, 0)).ToRotationMatrix();
-
-			m_renderer->DrawModel(m_model, (rotation * tako::Quaternion::FromEuler({ 90, 0, 0 }).ToRotationMatrix()).translate(boid.position));
+			m_renderer->DrawModel(m_model, transform);
 		}
 
 		m_renderer->End();
