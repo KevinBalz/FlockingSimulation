@@ -6,7 +6,7 @@
 #include "Boid.hpp"
 #include "Octree.hpp"
 
-constexpr size_t BOID_COUNT = 80000;
+constexpr size_t BOID_COUNT = 200000;
 
 struct StateData
 {
@@ -198,10 +198,13 @@ public:
 		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
+		/*
 		for (auto& transform : frameData->boidTransforms)
 		{
 			m_renderer->DrawModel(m_model, transform);
 		}
+		*/
+		m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
 
 		m_renderer->End();
 	}
