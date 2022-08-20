@@ -181,8 +181,8 @@ public:
 		}
 		
 		auto separation = 15 * flockAvoid;
-		auto alignment = 8 * flockSpeed;
-		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude(10);
+		auto alignment = 4 * flockSpeed;
+		boid.velocity += dt * (cohesion + separation + alignment + boundsAvoidance).limitMagnitude(5);
 		auto speed = boid.velocity.magnitudeSquared();
 		if (speed > 10 * 10)
 		{
@@ -198,12 +198,6 @@ public:
 		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
-		/*
-		for (auto& transform : frameData->boidTransforms)
-		{
-			m_renderer->DrawModel(m_model, transform);
-		}
-		*/
 		m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
 
 		m_renderer->End();
