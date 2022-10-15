@@ -1,41 +1,20 @@
 #pragma once
 #include <array>
-#include <vector>
 #include "Rect.hpp"
 #include "Boid.hpp"
 #include "JobSystem.hpp"
+#include "SmallVec.hpp"
+#include "ExpandingPoolAllocator.hpp"
 #include <algorithm>
 
-constexpr size_t MAX_ELEMENTS_LEAF = 128;
-constexpr size_t MAX_TREE_DEPTH = 256;
-
-template<typename Callback, typename T>
-void RemoveIf(std::vector<T>& vec, Callback& c)
-{
-	for (int i = 0; i < vec.size(); i++)
-	{
-		auto& b = vec[i];
-		bool remove = c(b);
-		if (remove)
-		{
-			if (i == vec.size() - 1)
-			{
-				vec.pop_back();
-			}
-			else
-			{
-				std::swap(vec[i], vec[vec.size() - 1]);
-				vec.pop_back();
-				i--;
-			}
-		}
-	}
-}
+constexpr size_t MAX_ELEMENTS_LEAF = 64;
+constexpr size_t MAX_TREE_DEPTH = 8;
 
 template<typename Callback, typename T, size_t arr_size>
-void RemoveIf(std::array<T, arr_size>& arr, size_t& size, Callback& c)
+void RemoveIf(tako::SmallVec<T, arr_size>& arr, Callback& c)
 {
-	for (int i = 0; i < size; i++)
+	size_t size;
+	for (int i = 0; i < (size = arr.GetLength()); i++)
 	{
 		auto& b = arr[i];
 		bool remove = c(b);
@@ -43,12 +22,12 @@ void RemoveIf(std::array<T, arr_size>& arr, size_t& size, Callback& c)
 		{
 			if (i == size - 1)
 			{
-				size--;
+				arr.Pop();
 			}
 			else
 			{
 				std::swap(arr[i], arr[size - 1]);
-				size--;
+				arr.Pop();
 				i--;
 			}
 		}
@@ -63,8 +42,9 @@ class Octree
 		Boid b;
 		Boid* p;
 	};
+	using OutsiderVec = tako::SmallVec<Node, 128>;
 public:
-	Octree(Rect area, tako::Allocators::PoolAllocator& pool, size_t depth = 0) : m_area(area), m_depth(depth), m_pool(pool), m_size(0)
+	Octree(Rect area, size_t depth = 0) : m_area(area), m_depth(depth)
 	{
 
 	}
@@ -107,60 +87,94 @@ public:
 				}
 			}
 		}
-
-		for (int i = 0; i < m_size; i++)
+		else
 		{
-			callback(m_containing[i].b);
+			for (int i = 0; i < m_containing.size(); i++)
+			{
+				callback(m_containing[i].b);
+			}
 		}
+		
 	}
 
-	/*
-	//TODO: Reevaluate, not more performance as expected
-	void RebalanceThreaded()
+	void RebalanceThreaded(OutsiderVec* outsiders = nullptr)
 	{
 		if (!m_branch || CheckCollapse())
 		{
-			Rebalance();
+			Rebalance(outsiders);
 			return;
 		}
 
-		for (int i = 0; i < 8; i++)
+		tako::JobSystem::Schedule([this, outsiders]()
 		{
-			Octree* leaf = &m_leafs[i];
-			tako::JobSystem::Schedule([leaf]()
+			auto ownOutsiders = reinterpret_cast<OutsiderVec*>(m_vecPool.Allocate());
+			std::array<bool, 8> leftToBalance{false};
+			
+			for (int i = 0; i < 8; i++)
 			{
-				leaf->RebalanceThreaded();
-			});
-		}
+				Octree* leaf = &m_leafs[i];
+				auto out = new (&ownOutsiders[i]) OutsiderVec();
+				if (leaf->m_branch && !leaf->CheckCollapse())
+				{
+					leaf->RebalanceThreaded(out);
+				}
+				else
+				{
+					leftToBalance[i] = true;
+				}
+			}
 
-		tako::JobSystem::Continuation([this]()
-		{
-			RebalanceOutsiders();
-			RebalanceContaining();
-			FetchChildOutsiders();
+			for (int i = 0; i < 8; i++)
+			{
+				if (leftToBalance[i])
+				{
+					m_leafs[i].Rebalance(&ownOutsiders[i]);
+				}
+			}
+
+			tako::JobSystem::Continuation([this, outsiders, ownOutsiders]()
+			{
+				RebalanceContaining(outsiders);
+				for (int l = 0; l < 8; l++)
+				{
+					m_totalChildElements -= ownOutsiders[l].size();
+					for (int i = 0; i < ownOutsiders[l].size(); i++)
+					{
+						auto& b = ownOutsiders[l][i];
+						if (m_area.Contains(b.b.position) || outsiders == nullptr)
+						{
+							InsertContained(b);
+						}
+						else
+						{
+							outsiders->push_back(b);
+						}
+					}
+					std::destroy_at(&ownOutsiders[l]);
+				}
+
+				m_vecPool.Deallocate(ownOutsiders);
+			});
 		});
 	}
-	*/
 
-	void Rebalance(std::pmr::vector<Node>* outsiders = nullptr)
+	void Rebalance(OutsiderVec* outsiders = nullptr)
 	{
 		if (m_branch)
 		{
-
 			if (CheckCollapse())
 			{
 				Collapse();
 			}
 			else
 			{
-				std::array<tako::U8, 1024 * sizeof(Node)> tmpData;
-				std::pmr::monotonic_buffer_resource buffer(tmpData.data(), tmpData.size());
-				std::pmr::vector<Node> ownOutsiders(&buffer);
+				OutsiderVec ownOutsiders;
 				for (int i = 0; i < 8; i++)
 				{
 					m_leafs[i].Rebalance(&ownOutsiders);
 				}
-				RebalanceContaining();
+				RebalanceContaining(outsiders);
+				m_totalChildElements -= ownOutsiders.size();
 				for (int i = 0; i < ownOutsiders.size(); i++)
 				{
 					auto& b = ownOutsiders[i];
@@ -177,36 +191,39 @@ public:
 		}
 		else
 		{
-			RebalanceContaining();
+			RebalanceContaining(outsiders);
 		}
 	}
 
 	size_t GetElementCount()
 	{
-		return m_size + m_totalChildElements;
+		return m_containing.size() + m_totalChildElements;
+	}
+
+	Rect GetArea()
+	{
+		return m_area;
 	}
 private:
 	Octree* m_leafs = nullptr;
-	std::array<Node, MAX_ELEMENTS_LEAF> m_containing;
-	size_t m_size;
+	tako::SmallVec<Node, MAX_ELEMENTS_LEAF> m_containing;
 	size_t m_totalChildElements = 0;
 	Rect m_area;
 	size_t m_depth;
-	tako::Allocators::PoolAllocator& m_pool;
 	bool m_branch = false;
+	thread_local static ExpandingPoolAllocator m_pool;
+	thread_local static ExpandingPoolAllocator m_vecPool;
 
 	void InsertArr(Node node)
 	{
-		//TODO: its possible if a large amount of child boids are on borders that the parent array could overfill
-		m_containing[m_size] = node;
-		m_size++;
+		m_containing.push_back(node);
 	}
 
 	void InsertContained(Node boid)
 	{
 		if (!m_branch)
 		{
-			if (m_size == MAX_ELEMENTS_LEAF)
+			if (m_containing.size() == MAX_ELEMENTS_LEAF && m_depth < MAX_TREE_DEPTH)
 			{
 				m_leafs = reinterpret_cast<Octree*>(m_pool.Allocate());
 				//Subdivide
@@ -220,7 +237,7 @@ private:
 				InitSubtree(7, 1, 1, -1);
 				m_branch = true;
 
-				RemoveIf(m_containing, m_size, [&](Node& b)
+				RemoveIf(m_containing, [&](Node& b)
 				{
 					return InsertIntoChild(b);
 				});
@@ -258,16 +275,16 @@ private:
 		auto size = 1.0f / 2 * m_area.size;
 		auto center = m_area.center + tako::Vector3(x * size.x / 2, y * size.y / 2, z * size.z / 2);
 		//LOG("{} {} {}, {} {} {}", center.x, center.y, center.z, size.x, size.y, size.z);
-		new (&m_leafs[i]) Octree({ center, size }, m_pool, m_depth + 1);
+		new (&m_leafs[i]) Octree({ center, size }, m_depth + 1);
 	}
 
-	void RebalanceContaining(std::pmr::vector<Node>* outsiders = nullptr)
+	void RebalanceContaining(OutsiderVec* outsiders = nullptr)
 	{
 		if (m_branch)
 		{
 			if (outsiders)
 			{
-				RemoveIf(m_containing, m_size, [&](Node& b)
+				RemoveIf(m_containing, [&](Node& b)
 				{
 					b.b = *b.p;
 					if (!m_area.Contains(b.b.position))
@@ -280,7 +297,7 @@ private:
 			}
 			else
 			{
-				RemoveIf(m_containing, m_size, [&](Node& b)
+				RemoveIf(m_containing, [&](Node& b)
 				{
 					b.b = *b.p;
 					return InsertIntoChild(b);
@@ -290,7 +307,7 @@ private:
 		}
 		else if (outsiders)
 		{
-			RemoveIf(m_containing, m_size, [&](Node& b)
+			RemoveIf(m_containing, [&](Node& b)
 			{
 				b.b = *b.p;
 				if (!m_area.Contains(b.b.position))
@@ -305,7 +322,7 @@ private:
 
 	bool CheckCollapse()
 	{
-		return m_totalChildElements + m_size < MAX_ELEMENTS_LEAF / 2;
+		return m_totalChildElements + m_containing.size() < MAX_ELEMENTS_LEAF / 2;
 	}
 
 	void Collapse()
@@ -329,7 +346,7 @@ private:
 			}
 		}
 
-		for (int i = 0; i < target->m_size; i++)
+		for (int i = 0; i < target->m_containing.size(); i++)
 		{
 			InsertArr(target->m_containing[i]);
 		}

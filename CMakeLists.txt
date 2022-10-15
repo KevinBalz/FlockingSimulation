@@ -8,7 +8,7 @@ add_subdirectory("dependencies/tako")
 include(tako)
 SET(EXECUTABLE game)
 add_executable(${EXECUTABLE} WIN32
-        "src/Main.cpp")
+        "src/Main.cpp" "src/Octree.cpp")
 
 tako_setup(${EXECUTABLE})
 target_link_libraries(${EXECUTABLE} PRIVATE tako)

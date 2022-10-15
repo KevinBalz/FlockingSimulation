@@ -1,12 +1,12 @@
 #include "Tako.hpp"
 #include "Renderer3D.hpp"
 #include <memory_resource>
-#include <map>
 #include "Allocators/LinearAllocator.hpp"
 #include "Boid.hpp"
 #include "Octree.hpp"
+#include <random>
 
-constexpr size_t BOID_COUNT = 200000;
+constexpr size_t BOID_COUNT = 300000;
 
 struct StateData
 {
@@ -58,11 +58,15 @@ constexpr int SPAWN_RANGE = 500;
 class Game
 {
 public:
-	Game() : m_octPool(m_poolData.data(), m_poolData.size(), sizeof(Octree) * 8), m_tree(Rect({0, 0, 0}, {SPAWN_RANGE * 2, SPAWN_RANGE * 2, SPAWN_RANGE * 2}), m_octPool)
+	Game() : m_tree(Rect({0, 0, 0}, {SPAWN_RANGE * 2, SPAWN_RANGE * 2, SPAWN_RANGE * 2}))
 	{
 	}
 	void Setup(const tako::SetupData& setup)
 	{
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::uniform_real_distribution<float> spawnDistrib(-SPAWN_RANGE/2, SPAWN_RANGE/2);
+		std::uniform_real_distribution<float> velDistrib(-10, 10);
 		m_renderer = new tako::Renderer3D(setup.context);
 		tako::Bitmap tex(124, 124);
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
@@ -70,8 +74,8 @@ public:
 		m_model = m_renderer->LoadModel("./Assets/boid.glb");
 		for (auto& boid : prevState.boids)
 		{
-			boid.position = tako::Vector3(rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f, rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f, rand() % SPAWN_RANGE - SPAWN_RANGE / 2 + 0.5f);
-			boid.velocity = tako::Vector3(rand() % 10 - 5, rand() % 10 - 5, rand() % 10 - 5);
+			boid.position = tako::Vector3(spawnDistrib(gen), spawnDistrib(gen), spawnDistrib(gen));
+			boid.velocity = tako::Vector3(velDistrib(gen), velDistrib(gen), velDistrib(gen));
 			m_tree.Insert(&boid);
 		}
 	}
@@ -79,6 +83,46 @@ public:
 	void Update(tako::Input* input, float dt, FrameData* frameData)
 	{
 		new (frameData) FrameData();
+		if (input->GetKey(tako::Key::N1))
+		{
+			boundLimiter = 1;
+		}
+		if (input->GetKey(tako::Key::N2))
+		{
+			boundLimiter = 2;
+		}
+		if (input->GetKey(tako::Key::N3))
+		{
+			boundLimiter = 3;
+		}
+		if (input->GetKey(tako::Key::N4))
+		{
+			boundLimiter = 4;
+		}
+		if (input->GetKey(tako::Key::N5))
+		{
+			boundLimiter = 5;
+		}
+		if (input->GetKey(tako::Key::N6))
+		{
+			boundLimiter = 6;
+		}
+		if (input->GetKey(tako::Key::N7))
+		{
+			boundLimiter = 7;
+		}
+		if (input->GetKey(tako::Key::N8))
+		{
+			boundLimiter = 8;
+		}
+		if (input->GetKey(tako::Key::N9))
+		{
+			boundLimiter = 9;
+		}
+		if (input->GetKey(tako::Key::N0))
+		{
+			boundLimiter = 10;
+		}
 		ParallelFor(BOID_COUNT, 500, [=](size_t i)
 		{
 			frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
@@ -135,8 +179,8 @@ public:
 				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ 90, 0, 0 }).ToRotationMatrix()).translate(frameData->state.boids[i].position);
 			});
 
+			m_tree.RebalanceThreaded();
 			prevState = frameData->state;
-			m_tree.Rebalance();
 		});
 	}
 
@@ -148,13 +192,14 @@ public:
 		tako::Vector3 flockCenter;
 		tako::Vector3 flockAvoid;
 		tako::Vector3 flockSpeed;
-		m_tree.Iterate({ boid.position, {10, 10, 10} }, [&](Boid other)
+		constexpr auto lookRadius = 3;
+		m_tree.Iterate({ boid.position, {lookRadius, lookRadius, lookRadius} }, [&](Boid other)
 		{
 			auto offset = boid.position - other.position;
 			auto distanceSquared = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
 
 			//if distance is 0  - it probably is it self
-			if (distanceSquared < 10 * 10 && distanceSquared > 0)
+			if (distanceSquared > 0 && distanceSquared < lookRadius * lookRadius)
 			{
 				flockMates++;
 				flockCenter += other.position;
@@ -164,8 +209,8 @@ public:
 		});
 
 		tako::Vector3 boundsAvoidance(0, 0, 0);
-		float boundary = SPAWN_RANGE / 3;
-		float boundFactor = 1.0f;
+		float boundary = SPAWN_RANGE / boundLimiter;
+		float boundFactor = 1;
 		auto centerOffset = tako::Vector3(0, 0, 0) - boid.position;
 		auto centerDistance = centerOffset.magnitudeSquared();
 		if (centerDistance > boundary * boundary)
@@ -177,7 +222,7 @@ public:
 		{
 			flockCenter /= flockMates;
 			flockSpeed /= flockMates;
-			cohesion = 6 * (flockCenter - boid.position);
+			cohesion = 4 * (flockCenter - boid.position);
 		}
 		
 		auto separation = 15 * flockAvoid;
@@ -207,9 +252,8 @@ private:
 	tako::Vector2 prevMousePos;
 	tako::Renderer3D* m_renderer;
 	tako::Material m_material;
+	int boundLimiter = 1;
 	tako::Model m_model;
-	std::array<tako::U8, 1024 * sizeof(Octree) * 8> m_poolData;
-	tako::Allocators::PoolAllocator m_octPool;
 	Octree m_tree;
 };
 
