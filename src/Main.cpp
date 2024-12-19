@@ -8,7 +8,7 @@ import Flocking.Boid;
 import Flocking.Octree;
 import Flocking.Rect;
 
-constexpr size_t BOID_COUNT = 300000;
+constexpr size_t BOID_COUNT = 30000;
 
 struct StateData
 {
@@ -74,7 +74,7 @@ public:
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
 		auto texture = m_renderer->CreateTexture(tex);
 		m_material = setup.context->CreateMaterial(&texture);
-		m_model = m_renderer->LoadModel("./Assets/boid.glb");
+		//m_model = m_renderer->LoadModel("./Assets/boid.glb");
 		for (auto& boid : prevState.boids)
 		{
 			boid.position = tako::Vector3(spawnDistrib(gen), spawnDistrib(gen), spawnDistrib(gen));
