@@ -1,10 +1,12 @@
 #include "Tako.hpp"
-#include "Renderer3D.hpp"
 #include <memory_resource>
-#include "Allocators/LinearAllocator.hpp"
-#include "Boid.hpp"
-#include "Octree.hpp"
 #include <random>
+
+import Tako.Renderer3D;
+import Tako.Allocators.LinearAllocator;
+import Flocking.Boid;
+import Flocking.Octree;
+import Flocking.Rect;
 
 constexpr size_t BOID_COUNT = 300000;
 
@@ -70,7 +72,8 @@ public:
 		m_renderer = new tako::Renderer3D(setup.context);
 		tako::Bitmap tex(124, 124);
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
-		m_material = setup.context->CreateMaterial(&m_renderer->CreateTexture(tex));
+		auto texture = m_renderer->CreateTexture(tex);
+		m_material = setup.context->CreateMaterial(&texture);
 		m_model = m_renderer->LoadModel("./Assets/boid.glb");
 		for (auto& boid : prevState.boids)
 		{
@@ -83,6 +86,7 @@ public:
 	void Update(tako::Input* input, float dt, FrameData* frameData)
 	{
 		new (frameData) FrameData();
+		/*
 		if (input->GetKey(tako::Key::N1))
 		{
 			boundLimiter = 1;
@@ -123,7 +127,8 @@ public:
 		{
 			boundLimiter = 10;
 		}
-		ParallelFor(BOID_COUNT, 500, [=](size_t i)
+		*/
+		ParallelFor(BOID_COUNT, 500, [=, this](size_t i)
 		{
 			frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
 		});
@@ -170,7 +175,7 @@ public:
 
 		frameData->state.cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
 
-		tako::JobSystem::Continuation([=]()
+		tako::JobSystem::Continuation([=, this]()
 		{
 			ParallelFor(BOID_COUNT, 1000, [=](size_t i)
 			{
@@ -243,7 +248,8 @@ public:
 		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
-		m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
+		//m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
+		m_renderer->DrawCubeInstanced(m_material, frameData->boidTransforms.size(), frameData->boidTransforms.data());
 
 		m_renderer->End();
 	}
@@ -280,7 +286,8 @@ void tako::InitTakoConfig(GameConfig& config)
 	config.Setup = Setup;
 	config.Update = Update;
 	config.Draw = Draw;
-	config.graphicsAPI = tako::GraphicsAPI::Vulkan;
+	config.graphicsAPI = tako::GraphicsAPI::WebGPU;
+	config.initAudioDelayed = true;
 	config.gameDataSize = sizeof(Game);
 	config.frameDataSize = sizeof(FrameData);
 }

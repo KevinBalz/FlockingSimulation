@@ -1,11 +1,12 @@
-#pragma once
-#include "Allocators/Allocator.hpp"
+module;
 #include "Utility.hpp"
 #include "NumberTypes.hpp"
 #include <cstdlib>
+export module Flocking.ExpandingPoolAllocator;
 
+import Tako.Allocators.Allocator;
 
-class ExpandingPoolAllocator final : public tako::Allocator
+export class ExpandingPoolAllocator final : public tako::Allocator
 {
 	struct Node
 	{

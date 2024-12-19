@@ -1,22 +1,26 @@
-#pragma once
+module;
 #include <array>
-#include "Rect.hpp"
-#include "Boid.hpp"
-#include "JobSystem.hpp"
-#include "SmallVec.hpp"
-#include "ExpandingPoolAllocator.hpp"
 #include <algorithm>
+export module Flocking.Octree;
+
+import Tako.JobSystem;
+import Tako.SmallVec;
+import Tako.Math;
+
+import Flocking.Rect;
+import Flocking.Boid;
+import Flocking.ExpandingPoolAllocator;
 
 constexpr size_t MAX_ELEMENTS_LEAF = 64;
 constexpr size_t MAX_TREE_DEPTH = 8;
 
 template<typename Callback, typename T, size_t arr_size>
-void RemoveIf(tako::SmallVec<T, arr_size>& arr, Callback& c)
+void RemoveIf(tako::SmallVec<T, arr_size>& arr, Callback c)
 {
 	size_t size;
 	for (int i = 0; i < (size = arr.GetLength()); i++)
 	{
-		auto& b = arr[i];
+		T& b = arr[i];
 		bool remove = c(b);
 		if (remove)
 		{
@@ -26,16 +30,17 @@ void RemoveIf(tako::SmallVec<T, arr_size>& arr, Callback& c)
 			}
 			else
 			{
-				std::swap(arr[i], arr[size - 1]);
+				arr[i] = arr[size - 1];
 				arr.Pop();
 				i--;
 			}
+			size--;
 		}
 	}
 }
 
 
-class Octree
+export class Octree
 {
 	struct Node
 	{
@@ -74,7 +79,7 @@ public:
 	}
 
 	template<typename Callback>
-	void Iterate(Rect area, Callback& callback)
+	void Iterate(Rect area, Callback callback)
 	{
 		if (m_branch)
 		{
@@ -237,7 +242,7 @@ private:
 				InitSubtree(7, 1, 1, -1);
 				m_branch = true;
 
-				RemoveIf(m_containing, [&](Node& b)
+				RemoveIf(m_containing, [this](Node& b)
 				{
 					return InsertIntoChild(b);
 				});
@@ -284,7 +289,7 @@ private:
 		{
 			if (outsiders)
 			{
-				RemoveIf(m_containing, [&](Node& b)
+				RemoveIf(m_containing, [&, this](Node& b)
 				{
 					b.b = *b.p;
 					if (!m_area.Contains(b.b.position))
@@ -297,7 +302,7 @@ private:
 			}
 			else
 			{
-				RemoveIf(m_containing, [&](Node& b)
+				RemoveIf(m_containing, [this](Node& b)
 				{
 					b.b = *b.p;
 					return InsertIntoChild(b);
@@ -307,7 +312,7 @@ private:
 		}
 		else if (outsiders)
 		{
-			RemoveIf(m_containing, [&](Node& b)
+			RemoveIf(m_containing, [&, this](Node& b)
 			{
 				b.b = *b.p;
 				if (!m_area.Contains(b.b.position))
@@ -361,3 +366,6 @@ private:
 		m_pool.Deallocate(m_leafs);
 	}
 };
+
+thread_local ExpandingPoolAllocator Octree::m_pool(8 * sizeof(Octree));
+thread_local ExpandingPoolAllocator Octree::m_vecPool(8 * sizeof(Octree::OutsiderVec));

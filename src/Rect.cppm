@@ -1,7 +1,8 @@
-#pragma once
-#include "Math.hpp"
+export module Flocking.Rect;
 
-struct Rect
+import Tako.Math;
+
+export struct Rect
 {
 	tako::Vector3 center;
 	tako::Vector3 size;
