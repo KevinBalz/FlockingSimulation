@@ -74,7 +74,11 @@ public:
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
 		auto texture = m_renderer->CreateTexture(tex);
 		m_material = setup.context->CreateMaterial(&texture);
-		//m_model = m_renderer->LoadModel("./Assets/boid.glb");
+		m_model = m_renderer->LoadModel("./Assets/boid.glb");
+		for (auto& node : m_model.nodes)
+		{
+			node.mat = m_material;
+		}
 		for (auto& boid : prevState.boids)
 		{
 			boid.position = tako::Vector3(spawnDistrib(gen), spawnDistrib(gen), spawnDistrib(gen));
@@ -181,7 +185,7 @@ public:
 			{
 				auto rotation = tako::Matrix4::DirectionToRotation(frameData->state.boids[i].velocity.normalized(), { 0, 1, 0 });
 
-				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ 90, 0, 0 }).ToRotationMatrix()).translate(frameData->state.boids[i].position);
+				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ -90, 0, 0 }).ToRotationMatrix()).translate(frameData->state.boids[i].position);
 			});
 
 			m_tree.RebalanceThreaded();
@@ -248,8 +252,7 @@ public:
 		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
 		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
 
-		//m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
-		m_renderer->DrawCubeInstanced(m_material, frameData->boidTransforms.size(), frameData->boidTransforms.data());
+		m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
 
 		m_renderer->End();
 	}
