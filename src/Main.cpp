@@ -73,8 +73,13 @@ public:
 		tako::Bitmap tex(124, 124);
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
 		auto texture = m_renderer->CreateTexture(tex);
-		m_material = setup.context->CreateMaterial(&texture);
-		m_model = m_renderer->LoadModel("./Assets/boid.glb");
+		m_material = setup.context->CreateMaterial(&texture);		
+		#ifdef TAKO_EMSCRIPTEN
+		auto path = "/boid.glb";
+		#else
+		auto path = "./Assets/boid.glb";
+		#endif
+		m_model = m_renderer->LoadModel(path);
 		for (auto& node : m_model.nodes)
 		{
 			node.mat = m_material;
@@ -142,7 +147,7 @@ public:
 		prevMousePos = mouseMove;
 
 		frameData->state.phi = prevState.phi + mouseDelta.x * 5;
-		frameData->state.theta = tako::mathf::clamp(prevState.theta + mouseDelta.y * 5, -90, 90);
+		frameData->state.theta = tako::mathf::clamp(prevState.theta - mouseDelta.y * 5, -90, 90);
 		auto xRotation = tako::Quaternion::AngleAxis(frameData->state.phi, tako::Vector3(0, 1, 0));
 		auto yRotation = tako::Quaternion::AngleAxis(frameData->state.theta, tako::Vector3(0, 0, -1));
 		frameData->state.cameraRotation = tako::Quaternion() * xRotation * yRotation;
