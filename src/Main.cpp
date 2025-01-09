@@ -1,6 +1,12 @@
 #include "Tako.hpp"
+#ifdef TAKO_IMGUI
+#include "imgui.h"
+#endif
+#include "Reflection.hpp"
 #include <memory_resource>
+#include <memory>
 #include <random>
+#include <span>
 
 import Tako.Renderer3D;
 import Tako.Allocators.LinearAllocator;
@@ -8,21 +14,24 @@ import Flocking.Boid;
 import Flocking.Octree;
 import Flocking.Rect;
 
-constexpr size_t BOID_COUNT = 30000;
+//constexpr size_t BOID_COUNT = 30000;
 
-struct StateData
-{
-	std::array<Boid, BOID_COUNT> boids;
-	tako::Vector3 cameraPosition = { 0, 0, 0 };
-	float phi = 0;
-	float theta = 0;
-	tako::Quaternion cameraRotation;
-};
 
 struct FrameData
 {
-	StateData state;
-	std::array<tako::Matrix4, BOID_COUNT> boidTransforms;
+	//StateData state;
+	tako::Vector3 cameraPosition;
+	tako::Quaternion cameraRotation;
+	size_t transformCount;
+	tako::Matrix4 boidTransforms[];
+};
+
+struct UIData
+{
+	int boidCount;
+	int stepCount = 5000;
+
+	REFLECT(UIData, boidCount, stepCount)
 };
 
 template<typename Callback>
@@ -65,36 +74,79 @@ public:
 	}
 	void Setup(const tako::SetupData& setup)
 	{
-		std::random_device rd;
-		std::mt19937 gen(rd());
-		std::uniform_real_distribution<float> spawnDistrib(-SPAWN_RANGE/2, SPAWN_RANGE/2);
-		std::uniform_real_distribution<float> velDistrib(-10, 10);
 		m_renderer = new tako::Renderer3D(setup.context);
+		m_ui = setup.ui;
 		tako::Bitmap tex(124, 124);
 		tex.FillRect(0, 0, 124, 124, { 255, 255, 255, 255 });
 		auto texture = m_renderer->CreateTexture(tex);
 		m_material = setup.context->CreateMaterial(&texture);		
 		#ifdef TAKO_EMSCRIPTEN
-		auto path = "/boid.glb";
+		std::string pathPrefix = "";
 		#else
-		auto path = "./Assets/boid.glb";
+		std::string pathPrefix = "./Assets";
 		#endif
-		m_model = m_renderer->LoadModel(path);
+		m_model = m_renderer->LoadModel(pathPrefix + "/boid.glb");
 		for (auto& node : m_model.nodes)
 		{
 			node.mat = m_material;
 		}
-		for (auto& boid : prevState.boids)
+
+		m_uiData.boidCount = m_targetBoidCount;
+		m_uiModel = m_ui->RegisterDataBinding(m_uiData);
+		m_ui->LoadFont(pathPrefix + "/Aileron-Regular.otf");
+		m_ui->LoadDocument(pathPrefix + "/UI.rml");
+	}
+
+	void SpawnBoids(std::span<Boid> boids)
+	{
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::uniform_real_distribution<float> spawnDistrib(-SPAWN_RANGE/2, SPAWN_RANGE/2);
+		std::uniform_real_distribution<float> velDistrib(-10, 10);
+		for (auto& boid : boids)
 		{
 			boid.position = tako::Vector3(spawnDistrib(gen), spawnDistrib(gen), spawnDistrib(gen));
 			boid.velocity = tako::Vector3(velDistrib(gen), velDistrib(gen), velDistrib(gen));
-			m_tree.Insert(&boid);
+			//m_tree.Insert(&boid);
 		}
 	}
 
-	void Update(tako::Input* input, float dt, FrameData* frameData)
+	void Update(tako::Input* input, float dt, FrameData* frameData, size_t frameDataSize)
 	{
-		new (frameData) FrameData();
+		//new (frameData) FrameData();
+		auto boidCount = (frameDataSize - sizeof(FrameData)) / sizeof(tako::Matrix4);
+		
+		auto prevBoids = m_prevBoids;
+		auto curBoids = m_curBoids;
+		if (!prevBoids || prevBoids->size() != boidCount)
+		{
+			m_tree.Clear();
+			auto old = prevBoids;
+			m_prevBoids = prevBoids = std::make_shared<std::vector<Boid>>(boidCount);	
+			if (old && false)
+			{
+				const auto oldSize = old->size();
+				for (int i = 0; i < std::min(oldSize, boidCount); i++)
+				{
+					(*prevBoids)[i] = (*old)[i];
+				}
+				if (oldSize < boidCount)
+				{
+					SpawnBoids(std::span{*prevBoids}.subspan(oldSize, boidCount));
+				}
+			}
+			else
+			{
+				SpawnBoids(*prevBoids);
+			}
+			m_curBoids = curBoids = std::make_shared<std::vector<Boid>>(boidCount);
+
+			for (auto& boid : *prevBoids)
+			{
+				m_tree.Insert(&boid);
+			}
+		}
+		
 		/*
 		if (input->GetKey(tako::Key::N1))
 		{
@@ -137,38 +189,41 @@ public:
 			boundLimiter = 10;
 		}
 		*/
-		ParallelFor(BOID_COUNT, 500, [=, this](size_t i)
+		ParallelFor(boidCount, 500, [=, this](size_t i)
 		{
-			frameData->state.boids[i] = SimulateBoid(i, dt, frameData);
+			(*curBoids)[i] = SimulateBoid(*prevBoids, i, dt, frameData);
 		});
 
 		auto mouseMove = input->GetMousePosition();
 		auto mouseDelta = mouseMove - prevMousePos;
 		prevMousePos = mouseMove;
 
-		frameData->state.phi = prevState.phi + mouseDelta.x * 5;
-		frameData->state.theta = tako::mathf::clamp(prevState.theta - mouseDelta.y * 5, -90, 90);
-		auto xRotation = tako::Quaternion::AngleAxis(frameData->state.phi, tako::Vector3(0, 1, 0));
-		auto yRotation = tako::Quaternion::AngleAxis(frameData->state.theta, tako::Vector3(0, 0, -1));
-		frameData->state.cameraRotation = tako::Quaternion() * xRotation * yRotation;
+		phi = phi + mouseDelta.x * 5;
+		theta = tako::mathf::clamp(theta - mouseDelta.y * 5, -90, 90);
+		auto xRotation = tako::Quaternion::AngleAxis(phi, tako::Vector3(0, 1, 0));
+		auto yRotation = tako::Quaternion::AngleAxis(theta, tako::Vector3(0, 0, -1));
+		frameData->cameraRotation = tako::Quaternion() * xRotation * yRotation;
 
 		tako::Vector3 movAxis;
-		if (input->GetKey(tako::Key::W))
+		if (input->GetKey(tako::Key::W) || input->GetKey(tako::Key::Gamepad_Dpad_Up))
 		{
 			movAxis.z += 1;
 		}
-		if (input->GetKey(tako::Key::S))
+		if (input->GetKey(tako::Key::S) || input->GetKey(tako::Key::Gamepad_Dpad_Down))
 		{
 			movAxis.z -= 1;
 		}
-		if (input->GetKey(tako::Key::A))
+		if (input->GetKey(tako::Key::A) || input->GetKey(tako::Key::Gamepad_Dpad_Left))
 		{
 			movAxis.x -= 1;
 		}
-		if (input->GetKey(tako::Key::D))
+		if (input->GetKey(tako::Key::D) || input->GetKey(tako::Key::Gamepad_Dpad_Right))
 		{
 			movAxis.x += 1;
 		}
+
+		auto leftAxis = input->GetAxis(tako::Axis::Left);
+		movAxis += {leftAxis.x, 0, leftAxis.y};
 
 		movAxis = xRotation * movAxis;
 
@@ -180,27 +235,67 @@ public:
 		{
 			movAxis.y += 1;
 		}
+		
 
 
-		frameData->state.cameraPosition = prevState.cameraPosition + dt * 20 * movAxis;
+		frameData->cameraPosition = cameraPosition += dt * 20 * movAxis;
+
+		/*
+		#ifdef TAKO_IMGUI
+		ImGui::Begin("Boids");
+		ImGui::InputScalar("Target count", ImGuiDataType_U64, &m_targetBoidCount);
+		ImGui::End();
+		#endif
+		*/
+
+		
+		if (m_uiModel.IsVariableDirty("boidCount"))
+		{
+			m_targetBoidCount = m_uiData.boidCount;
+		}
+		if (input->GetKeyDown(tako::Key::Left) || input->GetKeyDown(tako::Key::Gamepad_L))
+		{
+			m_targetBoidCount -= 5000;
+			
+		}
+		if (input->GetKeyDown(tako::Key::Right) || input->GetKeyDown(tako::Key::Gamepad_R))
+		{
+			m_targetBoidCount += 5000;
+		}
+
+		m_targetBoidCount = std::max<size_t>(m_targetBoidCount, m_uiData.stepCount);
+
+		if (m_uiData.boidCount != m_targetBoidCount)
+		{
+			m_uiData.boidCount = m_targetBoidCount;
+			m_uiModel.DirtyVariable("boidCount");
+		}
 
 		tako::JobSystem::Continuation([=, this]()
 		{
-			ParallelFor(BOID_COUNT, 1000, [=](size_t i)
+			frameData->transformCount = boidCount;
+			auto& boids = *curBoids;
+			ParallelFor(boidCount, 1000, [=, this](size_t i)
 			{
-				auto rotation = tako::Matrix4::DirectionToRotation(frameData->state.boids[i].velocity.normalized(), { 0, 1, 0 });
+				auto rotation = tako::Matrix4::DirectionToRotation(boids[i].velocity.normalized(), { 0, 1, 0 });
 
-				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ -90, 0, 0 }).ToRotationMatrix()).translate(frameData->state.boids[i].position);
+				frameData->boidTransforms[i] = (rotation * tako::Quaternion::FromEuler({ -90, 0, 0 }).ToRotationMatrix()).translate(boids[i].position);
 			});
 
 			m_tree.RebalanceThreaded();
-			prevState = frameData->state;
+			//prevState = frameData->state;
+			//std::swap(m_prevBoids, m_curBoids);
+			//*m_prevBoids = *m_curBoids;
+			for (int i = 0; i < boidCount; i++)
+			{
+				(*prevBoids)[i] = (*curBoids)[i];
+			}
 		});
 	}
 
-	Boid SimulateBoid(size_t index, float dt, FrameData* frameData)
+	Boid SimulateBoid(std::span<Boid> prevBoids, size_t index, float dt, FrameData* frameData)
 	{
-		Boid* self = &prevState.boids[index];
+		Boid* self = &prevBoids[index];
 		Boid boid = *self;
 		int flockMates = 0;
 		tako::Vector3 flockCenter;
@@ -254,21 +349,38 @@ public:
 	void Draw(FrameData* frameData)
 	{
 		m_renderer->Begin();
-		m_renderer->SetLightPosition(frameData->state.cameraPosition * -1);
-		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->state.cameraPosition, frameData->state.cameraRotation));
+		m_renderer->SetLightPosition(frameData->cameraPosition * -1);
+		m_renderer->SetCameraView(tako::Matrix4::cameraViewMatrix(frameData->cameraPosition, frameData->cameraRotation));
 
-		m_renderer->DrawModelInstanced(m_model, frameData->boidTransforms.size(), frameData->boidTransforms.data());
+		m_renderer->DrawModelInstanced(m_model, frameData->transformCount, frameData->boidTransforms);
 
 		m_renderer->End();
 	}
+
+	void CheckFrameDataSizeChange(size_t& frameDataSize)
+	{
+		frameDataSize = sizeof(FrameData) * 2 + sizeof(tako::Matrix4) * m_targetBoidCount;
+	}
+
 private:
-	StateData prevState;
+	std::vector<Boid> m_boidVecA;
+	std::vector<Boid> m_boidVecB;
+	std::shared_ptr<std::vector<Boid>> m_prevBoids;
+	std::shared_ptr<std::vector<Boid>> m_curBoids;
+	tako::Vector3 cameraPosition = { 0, 0, 0 };
+	float phi = 0;
+	float theta = 0;
+	tako::Quaternion cameraRotation;
 	tako::Vector2 prevMousePos;
 	tako::Renderer3D* m_renderer;
+	tako::RmlUi* m_ui;
+	UIData m_uiData;
+	tako::RmlUi::ModelHandle m_uiModel;
 	tako::Material m_material;
 	int boundLimiter = 1;
 	tako::Model m_model;
 	Octree m_tree;
+	size_t m_targetBoidCount = 30000;
 };
 
 void Setup(void* gameData, const tako::SetupData& setup)
@@ -277,10 +389,16 @@ void Setup(void* gameData, const tako::SetupData& setup)
 	game->Setup(setup);
 }
 
+void CheckFrameDataSizeChange(void* gameData, size_t& frameDataSize)
+{
+	auto game = reinterpret_cast<Game*>(gameData);
+	game->CheckFrameDataSizeChange(frameDataSize);
+}
+
 void Update(const tako::GameStageData stageData, tako::Input* input, float dt)
 {
 	auto game = reinterpret_cast<Game*>(stageData.gameData);
-	game->Update(input, dt, reinterpret_cast<FrameData*>(stageData.frameData));
+	game->Update(input, dt, reinterpret_cast<FrameData*>(stageData.frameData), stageData.frameDataSize);
 }
 
 void Draw(const tako::GameStageData stageData)
@@ -292,6 +410,7 @@ void Draw(const tako::GameStageData stageData)
 void tako::InitTakoConfig(GameConfig& config)
 {
 	config.Setup = Setup;
+	config.CheckFrameDataSizeChange = CheckFrameDataSizeChange;
 	config.Update = Update;
 	config.Draw = Draw;
 	config.graphicsAPI = tako::GraphicsAPI::WebGPU;

@@ -1,0 +1,41 @@
+<rml>
+  <head>
+    <title>UI</title>
+    <style>
+      body
+      {
+        font-family: Aileron;
+        font-size: 24px;
+        position: absolute;
+        margin: 8px;
+      }
+
+      p
+      {
+        display: block;
+        color: white;
+      }
+
+      div
+      {
+        margin: 4px;
+      }
+
+      button
+      {
+        background-color: rgb(69, 69, 69);
+      }
+
+      button:hover
+      {
+        background-color: rgb(137, 137, 137);
+      }
+    </style>
+  </head>
+  <body data-model="UIData">
+    <p>Boids: {{boidCount}}</p>
+    <button data-event-click="boidCount = boidCount - stepCount">-</button>
+    <div data-event-click="stepCount = stepCount + 1">Step: {{stepCount}}</div>
+    <button data-event-click="boidCount = boidCount + stepCount">+</button>
+  </body>
+</rml>

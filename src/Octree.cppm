@@ -1,6 +1,7 @@
 module;
 #include <array>
 #include <algorithm>
+#include <vector>
 export module Flocking.Octree;
 
 import Tako.JobSystem;
@@ -39,6 +40,31 @@ void RemoveIf(tako::SmallVec<T, arr_size>& arr, Callback c)
 	}
 }
 
+template<typename Callback, typename T>
+void RemoveIf(std::vector<T>& arr, Callback c)
+{
+	size_t size;
+	for (int i = 0; i < (size = arr.size()); i++)
+	{
+		T& b = arr[i];
+		bool remove = c(b);
+		if (remove)
+		{
+			if (i == size - 1)
+			{
+				arr.pop_back();
+			}
+			else
+			{
+				arr[i] = arr[size - 1];
+				arr.pop_back();
+				i--;
+			}
+			size--;
+		}
+	}
+}
+
 
 export class Octree
 {
@@ -47,12 +73,16 @@ export class Octree
 		Boid b;
 		Boid* p;
 	};
-	using OutsiderVec = tako::SmallVec<Node, 128>;
+	//using OutsiderVec = tako::SmallVec<Node, 128>;
+	using OutsiderVec = std::vector<Node>;
 public:
 	Octree(Rect area, size_t depth = 0) : m_area(area), m_depth(depth)
 	{
 
 	}
+
+	Octree(const Octree&) = delete;
+	Octree& operator=(const Octree&) = delete;
 
 	~Octree()
 	{
@@ -60,6 +90,17 @@ public:
 		{
 			DestroyLeafs();
 		}
+	}
+
+	void Clear()
+	{
+		if (m_branch)
+		{
+			DestroyLeafs();
+		}
+		m_branch = false;
+		m_containing.clear();
+		m_totalChildElements = 0;
 	}
 
 	void Insert(Boid* boid)
@@ -211,7 +252,8 @@ public:
 	}
 private:
 	Octree* m_leafs = nullptr;
-	tako::SmallVec<Node, MAX_ELEMENTS_LEAF> m_containing;
+	//tako::SmallVec<Node, MAX_ELEMENTS_LEAF> m_containing;
+	std::vector<Node> m_containing;
 	size_t m_totalChildElements = 0;
 	Rect m_area;
 	size_t m_depth;
